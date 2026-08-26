@@ -1,0 +1,21 @@
+prefect-setup:
+  build:
+    context: .
+    dockerfile: Dockerfile
+  container_name: prefect-setup
+  restart: "no"
+
+  depends_on:
+    prefect-server:
+      condition: service_healthy
+
+  environment:
+    PREFECT_API_URL: http://prefect-server:4200/api
+
+  volumes:
+    - ./app:/app/app
+    - ./deploy_flows.py:/app/deploy_flows.py
+
+  command:
+    - python
+    - deploy_flows.py
