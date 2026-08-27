@@ -1,9 +1,12 @@
 import ast
+import asyncio
 import json
 import os
 import subprocess
 import urllib.request
 from pathlib import Path
+from prefect.client.orchestration import get_client
+from prefect.client.schemas.schedules import construct_schedule
 
 
 FLOWS_DIRECTORY = Path("/app/app/flows")
@@ -13,6 +16,10 @@ MANAGED_TAG = "auto-managed"
 PREFECT_API_URL = os.getenv(
     "PREFECT_API_URL",
     "http://prefect-server:4200/api",
+)
+
+FLOW_SCHEDULES = json.loads(
+    os.getenv("FLOW_SCHEDULES", "{}")
 )
 
 
@@ -115,6 +122,66 @@ def find_flows():
 
     return flows
 
+async def create_schedules(flow_name: str, deployment_name: str):
+    schedules = FLOW_SCHEDULES.get(flow_name, [])
+
+    if not schedules:
+        print(f"No schedules configured for {flow_name}.")
+        return
+
+    prefect_flow_name = flow_name.replace("_", "-")
+
+    print(f"Flow name: {prefect_flow_name}")
+    print(f"Deployment name: {deployment_name}")
+    print(f"Looking for: {prefect_flow_name}/{deployment_name}")
+
+    async with get_client() as client:
+        deployment = await client.read_deployment_by_name(
+            f"{prefect_flow_name}/{deployment_name}"
+        )
+
+        print(f"Deployment found: {deployment.id}")
+
+        for schedule_config in schedules:
+            schedule = construct_schedule(
+                cron=schedule_config["cron"],
+                timezone=schedule_config.get(
+                    "timezone",
+                    "America/Sao_Paulo",
+                ),
+            )
+
+            await client.create_deployment_schedules(
+                deployment_id=deployment.id,
+                schedules=[
+                    (schedule, True)
+                ],
+                parameters=schedule_config.get(
+                    "parameters",
+                    {},
+                ),
+            )
+
+            print(
+                f"Schedule created: "
+                f"{schedule_config['cron']}"
+            )
+
+        registered_schedules = (
+            await client.read_deployment_schedules(
+                deployment.id
+            )
+        )
+
+        print("Registered schedules:")
+
+        for registered_schedule in registered_schedules:
+            print(registered_schedule)
+
+        print("Registered schedules:")
+
+        for registered_schedule in registered_schedules:
+            print(registered_schedule)
 
 def deploy_flow(flow):
     deployment_name = flow["name"].replace("_", "-")
@@ -136,6 +203,7 @@ def deploy_flow(flow):
         check=True,
     )
 
+    return deployment_name
 
 def main():
     print("Synchronizing deployments...")
@@ -147,7 +215,14 @@ def main():
     print(f"Found {len(flows)} flow(s).")
 
     for flow in flows:
-        deploy_flow(flow)
+        deployment_name = deploy_flow(flow)
+
+        asyncio.run(
+            create_schedules(
+                flow["name"],
+                deployment_name,
+            )
+        )
 
     print("Deployment synchronization completed.")
 
